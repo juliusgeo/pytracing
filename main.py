@@ -1,5 +1,6 @@
 from math import sqrt
-from itertools import takewhile
+from copy import deepcopy
+
 EPSILON = .0001
 
 
@@ -7,7 +8,7 @@ class Tuple:
     __slots__ = ("x", "y", "z", "w", "m")
     dims = ("x", "y", "z")
 
-    def __init__(self, x, y, z, w=0):
+    def __init__(self, x, y=0, z=0, w=0):
         self.x = x
         self.y = y
         self.z = z
@@ -47,11 +48,15 @@ class Tuple:
     def __abs__(self):
         return self.m
 
+    def __iter__(self):
+        for i in [self.x, self.y, self.z, self.w]:
+            yield i
+
     def normalize(self):
         return type(self)(self.x/abs(self), self.y/abs(self), self.z/abs(self), self.w/abs(self))
 
     def dot(self, other):
-        return sum([getattr(self, i) * getattr(other, i) for i in self.dims])
+        return sum([getattr(self, i) * getattr(other, i) for i in self.dims+tuple("w")])
 
     def type_from_op(self, other):
         if type(self) == Color:
@@ -162,6 +167,71 @@ class Canvas:
                 print(self.ppm_header()+self.ppm_body(), file=file)
         else:
             return self.ppm_header()+self.ppm_body()
+
+
+class Matrix:
+    def __init__(self, mat):
+        self.mat = mat
+
+    def __eq__(self, other):
+        return all([abs(i-n) < EPSILON for i, n in zip(self, other)])
+
+    def __getitem__(self, item):
+        return self.mat[item]
+
+    def __setitem__(self, key, value):
+        self.mat[key] = value
+
+    def __repr__(self):
+        out = ""
+        for row in self.mat:
+            for item in row:
+                out += f"{item}, "
+            out += "\n"
+        return out
+
+    def __iter__(self):
+        return iter([i for row in self.mat for i in row])
+
+    def pop(self, idx):
+        return Matrix([sublist for i, sublist in enumerate(self.mat) if i != idx])
+
+    def __mul__(self, other):
+        if isinstance(other, Tuple):
+            return Tuple(*[Tuple(*row).dot(other) for row in self.mat])
+        if isinstance(other, Matrix):
+            return Matrix([[Tuple(*row).dot(Tuple(*col)) for col in other.transpose().mat] for row in self.mat])
+        return Matrix([[i*other for i in row] for row in self.mat])
+
+    def transpose(self):
+        return Matrix(list(zip(*self.mat)))
+
+    def determinant(self):
+        if len(self.mat) > 2:
+            return sum([self.mat[0][i]*self.cofactor(0, i) for i in range(len(self.mat[0]))])
+        return Matrix.determ_base(Matrix(self.mat))
+
+    @classmethod
+    def determ_base(cls, mat):
+        return (mat[0][0] * mat[1][1]) - (mat[0][1] * mat[1][0])
+
+    def submatrix(self, row, column):
+        return Matrix(self.pop(row).transpose().pop(column).transpose().mat)
+
+    def minor(self, row, column):
+        return self.submatrix(row, column).determinant()
+
+    def cofactor(self, row, column):
+        return self.minor(row, column)*(1 if (row+column) % 2 == 0 else -1)
+
+    def invertible(self):
+        return not (self.determinant() == 0)
+
+    def inverse(self):
+        if not self.invertible():
+            raise TypeError
+        det = self.determinant()
+        return Matrix([[self.cofactor(i, n)/det for i in range(len(self.mat))] for n in range(len(self.mat[0]))])
 
 
 
