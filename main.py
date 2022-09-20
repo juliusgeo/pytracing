@@ -1,5 +1,5 @@
-from math import sqrt
-from copy import deepcopy
+from math import sqrt, cos, sin
+from uuid import UUID
 
 EPSILON = .0001
 
@@ -31,7 +31,9 @@ class Tuple:
         return Tuple(-self.x, -self.y, -self.z, -self.w)
 
     def __mul__(self, other):
-        if not isinstance(other, Vector):
+        if isinstance(other, Matrix):
+            return Matrix.__mul__(other, self)
+        elif not isinstance(other, Vector):
             return type(self)(*[getattr(self, i)*other for i in self.dims])
         else:
             return self.cross(other)
@@ -110,7 +112,8 @@ class Color(Tuple):
         return Color(self.x*other.x, self.y*other.y, self.z*other.z)
 
     def clamp(self):
-        clamper = lambda x, l, u: l if x < l else u if x > u else x
+        def clamper(x, l, u):
+            return l if x < l else u if x > u else x
         return Color(*[round(clamper(getattr(self, i), 0, 255)) for i in self.dims])
 
     def __str__(self):
@@ -122,7 +125,7 @@ class Canvas:
     def __init__(self, width, height):
         self.width = width
         self.height = height
-        self.canv_arr = [Color(0, 0, 0)]*((width*height))
+        self.canv_arr = [Color(0, 0, 0)]*width*height
 
     def write_pixel(self, x, y, color):
         self[(y*self.width)+x] = color
@@ -131,6 +134,8 @@ class Canvas:
         return self.canv_arr[item]
 
     def __setitem__(self, key, value):
+        if key > len(self.canv_arr):
+            return
         self.canv_arr[key] = value
 
     def ppm_header(self):
@@ -211,8 +216,8 @@ class Matrix:
             return sum([self.mat[0][i]*self.cofactor(0, i) for i in range(len(self.mat[0]))])
         return Matrix.determ_base(Matrix(self.mat))
 
-    @classmethod
-    def determ_base(cls, mat):
+    @staticmethod
+    def determ_base(mat):
         return (mat[0][0] * mat[1][1]) - (mat[0][1] * mat[1][0])
 
     def submatrix(self, row, column):
@@ -233,8 +238,55 @@ class Matrix:
         det = self.determinant()
         return Matrix([[self.cofactor(i, n)/det for i in range(len(self.mat))] for n in range(len(self.mat[0]))])
 
+    @staticmethod
+    def translating(x, y, z):
+        return Matrix([[1, 0, 0, x], [0, 1, 0, y], [0, 0, 1, z], [0, 0, 0, 1]])
+
+    @staticmethod
+    def scaling(x, y, z):
+        return Matrix([[x, 0, 0, 0], [0, y, 0, 0], [0, 0, z, 0], [0, 0, 0, 1]])
+
+    @staticmethod
+    def rotating(r, axis=0):
+        if axis == 0:
+            return Matrix([[1,      0,       0, 0],
+                           [0, cos(r), -sin(r), 0],
+                           [0, sin(r),  cos(r), 0],
+                           [0,      0,       0, 1]])
+        elif axis == 1:
+            return Matrix([[cos(r),  0, sin(r), 0],
+                           [0,       1,      0, 0],
+                           [-sin(r), 0, cos(r), 0],
+                           [0,       0,      0, 1]])
+        elif axis == 2:
+            return Matrix([[cos(r), -sin(r), 0, 0],
+                           [sin(r),  cos(r), 0, 0],
+                           [0,            0, 1, 0],
+                           [0,            0, 0, 1]])
+        raise TypeError("Invalid axis!")
+
+    @staticmethod
+    def shearing(xy, xz, yx, yz, zx, zy):
+        return Matrix([[1,  xy, xz, 0],
+                       [yx,  1, yz, 0],
+                       [zx, zy,  1, 0],
+                       [0,   0,  0, 1]])
+
+class Ray:
+    def __init__(self, origin, direction):
+        self.origin = origin
+        self.direction = direction
+
+    def position(self, d):
+        return self.origin + self.direction*d
 
 
+class Sphere:
+    def __init__(self, radius):
+        self.id = UUID()
+        self.radius = radius
+
+    def intersection(self, ray):
 
 
 

@@ -1,10 +1,16 @@
-from main import Point, Vector, Tuple, Projectile, Environment, Color, Canvas, Matrix
+from main import Point, Vector, Tuple, Projectile, Environment, Color, Canvas, Matrix, Ray
 
 import unittest
 import math
 
 
 class TupleTests(unittest.TestCase):
+    @staticmethod
+    def show_image():
+        from PIL import Image
+        i = Image.open("out.ppm")
+        i.show()
+
     def test_add(self):
         a = Point(3, -2, 5)
         b = Vector(-2, 3, 1)
@@ -55,6 +61,7 @@ class TupleTests(unittest.TestCase):
         self.assertEqual(Vector(4, 0, 0).normalize(), Vector(1, 0, 0))
         self.assertEqual(Vector(1, 2, 3).normalize(), Vector(0.26726, 0.53452, 0.80178))
 
+    @unittest.skip
     def test_projectiles(self):
         p = Projectile(Point(0, 1, 0), Vector(1, 1, 0).normalize())
         e = Environment(Vector(0, -0.1, 0), Vector(-0.01, 0, 0))
@@ -99,6 +106,7 @@ class TupleTests(unittest.TestCase):
 255 204 153 255 204 153""")
         c.ppm_file("out.ppm")
 
+    @unittest.skip
     def test_projectile_canvas(self):
         p = Projectile(Point(0, 1, 0), Vector(1, 1.8, 0).normalize() * 11.25)
         e = Environment(Vector(0, -0.1, 0), Vector(-0.01, 0, 0))
@@ -167,9 +175,57 @@ class TupleTests(unittest.TestCase):
                                               [-0.69231, -0.69231, -0.76923, -1.92308]]))
         m = Matrix([[9, 3, 0, 9],
              [-5, -2, -6, -3],
-             [-4, 9, 6, 4], 
+             [-4, 9, 6, 4],
              [-7, 6, 6, 2]])
         self.assertEqual(m.inverse(), Matrix([[-0.04074, -0.07778, 0.14444, -0.22222],
                                               [-0.07778, 0.03333, 0.36667, -0.33333],
                                               [-0.02901, -0.14630, -0.10926, 0.12963],
                                               [0.17778, 0.06667, -0.26667, 0.33333]]))
+
+    def test_transforms(self):
+        m = Matrix([[9, 3, 0, 9],
+                    [-5, -2, -6, -3],
+                    [-4, 9, 6, 4],
+                    [-7, 6, 6, 2]])
+        transform = Matrix.translating(1, 2, 3)
+        self.assertEqual(m, m*transform*transform.inverse())
+        transform = Matrix.scaling(2, 3, 4)
+        self.assertEqual(m, m * transform * transform.inverse())
+        v = Vector(-4, 6, 8)
+        self.assertEqual(v*transform, Vector(-8, 18,32))
+
+    def test_rotation(self):
+        for axis in [0, 1, 2]:
+            point = Point(1, 1, 1)
+            self.assertEqual(Matrix.rotating(math.pi, axis=axis)*Matrix.rotating(math.pi, axis=axis)*point, point)
+
+    def test_shearing(self):
+        start = [1, 0, 0, 0, 0, 0]
+        combos = [("x", "y"), ("x", "z"), ("y", "x"), ("y", "z"), ("z", "x"), ("z", "y")]
+        while start[-1] == 0:
+            p = Point(1, 2, 3)
+            cur_comb = combos.pop(0)
+            setattr(p, cur_comb[0], getattr(p, cur_comb[0])+getattr(p, cur_comb[1]))
+            self.assertEqual(Matrix.shearing(*start)*Point(1, 2, 3), p)
+            start = [start[-1]] + start[:-1]
+
+    def test_clock_face(self):
+        hand = Vector(0, 1, 0).normalize()
+        hands = 0
+        center_point = (20, 20)
+        c = Canvas(40, 40)
+        white = Color(1, 1, 1)
+        while hands < 12:
+            c.write_pixel(center_point[0]+round(hand.x*(c.width*2/4)), center_point[1]+round(hand.y*(c.height*2/4)), white)
+            hand = (Matrix.rotating(math.pi/6, axis=2)*hand).normalize()
+            print(hand)
+            hands = hands + 1
+        c.ppm_file("out.ppm")
+        self.show_image()
+
+    def test_ray_dist(self):
+        r = Ray(Point(2, 3, 4), Vector(1, 0, 0))
+        self.assertEqual(r.position(0), Point(2, 3, 4))
+        self.assertEqual(r.position(1), Point(3, 3, 4))
+        self.assertEqual(r.position(-1), Point(1, 3, 4))
+        self.assertEqual(r.position(2.5), Point(4.5, 3, 4))
