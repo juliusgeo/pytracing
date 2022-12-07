@@ -1,6 +1,6 @@
 import os
 
-from main import Point, Vector, Tuple, Projectile, Environment, Color, Canvas, Matrix, Ray, Sphere, Intersection
+from main import Point, Vector, Tuple, Projectile, Environment, Color, Canvas, Matrix, Ray, Sphere, Intersection, Scene
 
 import unittest
 import math
@@ -8,7 +8,9 @@ import numpy as np
 import numpy.testing as npt
 class TupleTests(unittest.TestCase):
     @staticmethod
-    def show_image():
+    def show_image(canvas=None):
+        if canvas:
+            canvas.ppm_file("out.ppm")
         from PIL import Image
         i = Image.open("out.ppm")
         i.show()
@@ -16,7 +18,7 @@ class TupleTests(unittest.TestCase):
     def test_add(self):
         a = Point(3, -2, 5)
         b = Vector(-2, 3, 1)
-        self.assertAlmostEquals(a + b, Tuple(1, 1, 6, 1))
+        self.assertAlmostEqual(a + b, Tuple(1, 1, 6, 1))
 
     def test_sub(self):
         p1 = Point(3, 2, 1)
@@ -221,8 +223,10 @@ class TupleTests(unittest.TestCase):
         while start[-1] == 0:
             p = Point(1, 2, 3)
             cur_comb = combos.pop(0)
-            setattr(p, cur_comb[0], getattr(
-                p, cur_comb[0])+getattr(p, cur_comb[1]))
+            kwargs = {"x":1, "y":2, "z":3}
+            kwargs.update({cur_comb[0]: getattr(
+                p, cur_comb[0])+getattr(p, cur_comb[1])})
+            p = Point(**kwargs)
             self.assertEqual(Matrix.shearing(*start)*Point(1, 2, 3), p)
             start = np.roll(start, shift=1, axis=0)
 
@@ -300,12 +304,7 @@ class TupleTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("TEST_RAY"), "this is too slow")
     def test_raycast_sphere(self):
         camera = Point(0, 0, -5)
-        background = (10, 7.0)
-        canvas_pixels = 200
-        pixel_size = background[1]/canvas_pixels
-        half = background[1]/2
-        canvas = Canvas(canvas_pixels, canvas_pixels)
-        color = Color(1, 0, 0)  # red
+        background = (10, 10)
+        canvas = Canvas(200, 200)
         shape = Sphere(5)
-        [canvas.write_pixel(x, y, color) for x in range(canvas_pixels) for y in range(canvas_pixels) if shape & Ray(camera, (Point(-half + pixel_size * x, half - pixel_size * y, background[0]) - camera).normalize())]
-        canvas.ppm_file("out.ppm")
+        self.show_image(Scene(camera, background, canvas, [shape]).trace())

@@ -2,9 +2,11 @@ from math import sqrt, cos, sin
 from uuid import uuid4
 from enum import Enum
 from functools import cached_property, cache
+import math
 from collections.abc import Iterable
 EPSILON = .0001
 import numpy as np
+
 def clamper(x, l, u=None):
     return l if x < l else u if x > u else x
 
@@ -26,21 +28,20 @@ class Tuple:
         return hash(self.mat.tobytes())
 
     def __eq__(self, other):
-        return np.all([np.abs(i-j) < EPSILON for i, j in zip(self, other)])
+        return all([math.isclose(i, j, abs_tol=EPSILON) for i, j in zip(self.mat.flatten(), other.mat.flatten())])
 
     def __add__(self, other):
         if not isinstance(other, Tuple):
-            return type(self)(*[i+other for i in self])
-        return self.type_from_op(other)(*[i+j for i, j in zip(self, other)])
-
+            return type(self)(*[self.mat+other])
+        return self.type_from_op(other)(*self.mat+other.mat)
 
     def __radd__(self, other):
         return self.__add__(other)
 
     def __sub__(self, other):
         if not isinstance(other, Tuple):
-            return type(self)(*[i-other for i in self])
-        return self.type_from_op(other)(*[i - j for i, j in zip(self, other)])
+            return type(self)(*[self.mat - other])
+        return self.type_from_op(other)(*self.mat - other.mat)
 
     def __rsub__(self, other):
         return self.__sub__(other)
@@ -48,6 +49,7 @@ class Tuple:
     def __neg__(self):
         return Tuple(-self.x, -self.y, -self.z, -self.w)
 
+    @cache
     def __mul__(self, other):
         if isinstance(other, Matrix):
             return Matrix.__mul__(other, self)
@@ -59,7 +61,7 @@ class Tuple:
     @cache
     def __truediv__(self, other, inverse=False):
         if not isinstance(other, Tuple):
-            return type(self)(*[i / other for i in self])
+            return type(self)(*self.mat/other)
         else:
             raise TypeError
 
@@ -73,16 +75,16 @@ class Tuple:
         return self.m
 
     def __iter__(self):
-        return iter([self.x, self.y, self.z, self.w])
+        return iter(self.mat)
 
-    @cache
     def normalize(self):
-        return type(self)(self.x/self.m, self.y/self.m, self.z/self.m, self.w/self.m)
+        return type(self)(*self.mat/self.m)
 
     @cache
     def dot(self, other):
         return np.dot(self.mat, other.mat)
 
+    @cache
     def type_from_op(self, other):
         if type(self) == Color:
             return Color
@@ -94,19 +96,20 @@ class Tuple:
             return Vector
         else:
             return Tuple
+
     @cache
     def invert(self):
-        return type(self)(*[1/i for i in self if i != 0])
+        return type(self)(*1/self.mat)
 
 class Point(Tuple):
     w = 1
-    def __init__(self, x, y, z, w=1):
+    def __init__(self, x=0, y=0, z=0, w=1):
         super().__init__(x, y, z, 1)
 
 
 class Vector(Tuple):
     w = 0
-    def __init__(self, x, y, z, w=0):
+    def __init__(self, x=0, y=0, z=0, w=0):
         super().__init__(x, y, z, 0)
 
     @cache
@@ -136,6 +139,7 @@ class Color(Tuple):
     def __init__(self, r, g, b, w=0):
         super().__init__(r, g, b, w)
 
+    @cache
     def __mul__(self, other):
         if not isinstance(other, Color):
             return Color(*[i*other for i in self])
@@ -229,7 +233,7 @@ class Matrix:
         return hash(self.mat.tobytes()) + hash(self.transform_type)
 
     def __eq__(self, other):
-        return all([abs(i-n) < EPSILON for l, r in zip(self.mat, other.mat) for i, n in zip(l, r)])
+        return all([math.isclose(i, j, abs_tol=EPSILON) for i, j in zip(self.mat.flatten(), other.mat.flatten())])
 
     def __getitem__(self, item):
         return self.mat[item]
@@ -257,7 +261,6 @@ class Matrix:
             return Matrix([[sum([i*n for i, n in zip(row, col)]) for col in other.transpose().mat] for row in self.mat])
         return Matrix([[i*other for i in row] for row in self.mat])
 
-    @cache
     def transpose(self):
         return Matrix(self.mat.transpose())
 
@@ -285,12 +288,9 @@ class Matrix:
     @cached_property
     def inv(self):
         return self.inverse()
-
+    @cache
     def inverse(self):
-        if not self.invertible():
-            return None
-        det = self.determinant()
-        return Matrix([[self.cofactor(i, n)/det for i in range(len(self.mat))] for n in range(len(self.mat[0]))])
+        return Matrix(np.linalg.inv(self.mat))
 
     @staticmethod
     def translating(x, y, z):
@@ -356,14 +356,15 @@ class Ray:
 
 
 class Sphere:
-    def __init__(self, radius, transform=Matrix.eye()):
+    def __init__(self, radius, transform=Matrix.eye(), color=Color(1, 0, 0)):
         self.id = uuid4()
         self.radius = radius
         self.transform = transform
+        self.color = color
         self._hash = self.hash()
 
     def hash(self):
-        return sum([hash(self.id), hash(self.radius), hash(self.transform)])
+        return sum([hash(self.id), hash(self.radius), hash(self.transform), hash(self.color)])
 
     def __hash__(self):
         return self._hash
@@ -425,3 +426,23 @@ class Intersection:
 
     def __gt__(self, other):
         return not self.__le__(other) and not self.__eq__(other)
+
+class Scene:
+    def __init__(self, camera, background, canvas, shapes):
+        self.camera = camera
+        self.background = background
+        self.canvas = canvas
+        self.shapes = shapes
+        self.half = background[1] / 2
+        self.pixel_size_x = background[0]/self.canvas.width
+        self.pixel_size_y = background[1]/self.canvas.height
+
+    def trace(self):
+        for y in range(self.canvas.height):
+            world_y = self.half - self.pixel_size_y * y
+            for x in range(self.canvas.width):
+                world_x = -self.half + self.pixel_size_x * x
+                for shape in self.shapes:
+                    if shape & Ray(self.camera, (Point(world_x, world_y, self.background[0]) - self.camera).normalize()):
+                        self.canvas.write_pixel(x, y, shape.color)
+        return self.canvas
