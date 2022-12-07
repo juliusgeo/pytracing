@@ -2,37 +2,32 @@ from math import sqrt, cos, sin
 from uuid import uuid4
 from enum import Enum
 from functools import cached_property, cache
+from collections.abc import Iterable
 EPSILON = .0001
-
-
+import numpy as np
 def clamper(x, l, u=None):
     return l if x < l else u if x > u else x
 
 class Tuple:
-    __slots__ = ("x", "y", "z", "w", "m", "_hash")
-    dims = ("x", "y", "z", "w")
+    __slots__ = ("x", "y", "z", "w", "m", "mat")
 
-    def __init__(self, x, y=0, z=0, w=0):
-        self.x = x
-        self.y = y
-        self.z = z
-        self.w = w
-        self.m = sqrt(self.x**2+self.y**2+self.z**2+self.w**2)
-        self._hash = self.hash()
+    def __init__(self, x=0, y=0, z=0, w=0, mat=None):
+        if mat is None:
+            mat = x, y, z, w
+        self.mat = mat
+        self.x, self.y, self.z, self.w = mat
+        self.mat = np.asarray([x, y, z, w], dtype="float")
+        self.m = np.linalg.norm(self.mat)
 
-    def hash(self):
-        return sum([hash(i) for i in self])
+    def __iter__(self):
+        return self.mat
 
     def __hash__(self):
-        return self._hash
+        return hash(self.mat.tobytes())
 
     def __eq__(self, other):
-        if isinstance(other, tuple):
-            m_i_n = min(len(self.dims), len(other))
-            return all([abs(getattr(self, l) - r) < EPSILON for l, r in zip(self.dims[:m_i_n], other[:m_i_n])])
-        return all([abs(i-j) < EPSILON for i, j in zip(self, other)])
+        return np.all([np.abs(i-j) < EPSILON for i, j in zip(self, other)])
 
-    @cache
     def __add__(self, other):
         if not isinstance(other, Tuple):
             return type(self)(*[i+other for i in self])
@@ -42,7 +37,6 @@ class Tuple:
     def __radd__(self, other):
         return self.__add__(other)
 
-    @cache
     def __sub__(self, other):
         if not isinstance(other, Tuple):
             return type(self)(*[i-other for i in self])
@@ -51,11 +45,9 @@ class Tuple:
     def __rsub__(self, other):
         return self.__sub__(other)
 
-    @cache
     def __neg__(self):
         return Tuple(-self.x, -self.y, -self.z, -self.w)
 
-    @cache
     def __mul__(self, other):
         if isinstance(other, Matrix):
             return Matrix.__mul__(other, self)
@@ -89,7 +81,7 @@ class Tuple:
 
     @cache
     def dot(self, other):
-        return sum([i*j for i, j in zip(self, other)])
+        return np.dot(self.mat, other.mat)
 
     def type_from_op(self, other):
         if type(self) == Color:
@@ -108,16 +100,12 @@ class Tuple:
 
 class Point(Tuple):
     w = 1
-    dims = ("x", "y", "z")
-
     def __init__(self, x, y, z, w=1):
         super().__init__(x, y, z, 1)
 
 
 class Vector(Tuple):
     w = 0
-    dims = ("x", "y", "z")
-
     def __init__(self, x, y, z, w=0):
         super().__init__(x, y, z, 0)
 
@@ -160,15 +148,22 @@ class Color(Tuple):
         clamped = (self*255).clamp()
         return f"{clamped.x} {clamped.y} {clamped.z}"
 
+    def __repr__(self):
+        return str(self)
+
 
 class Canvas:
     def __init__(self, width, height):
         self.width = width
         self.height = height
-        self.canv_arr = [Color(0, 0, 0)]*width*height
+        self.canv_arr = np.empty((self.width, self.height), dtype="object")
+        self.canv_arr.fill(Color(0, 0, 0))
 
     def write_pixel(self, x, y, color):
-        self[(y*self.width)+x] = color
+        try:
+            self.canv_arr[int(x)][int(y)] = color
+        except:
+            pass
 
     def __getitem__(self, item):
         return self.canv_arr[item]
@@ -185,7 +180,7 @@ class Canvas:
 """
 
     def chunk_canvas(self):
-        string = ' '.join([str(i) for i in self.canv_arr])
+        string = ' '.join([str(i) for i in self.canv_arr.flatten()])
 
         def chunker(s):
             chunks = []
@@ -223,19 +218,15 @@ class TransformType(Enum):
 
 class Matrix:
     def __init__(self, mat, transform_type=TransformType.UNKNOWN):
-        self.mat = mat
         self.transform_type = transform_type
-        self.size = (len(mat), len(mat[0]))
-        self.hash = self.hash()
-
-    def hash(self):
-        h = 0
-        for row in self.mat:
-            h += hash(tuple(row))
-        return h + hash(self.transform_type)
+        self.size = (len(mat), len(mat[0])) if isinstance(mat, list) else mat.shape
+        if not isinstance(mat, np.ndarray):
+            self.mat = np.asarray(mat, dtype="float").reshape(self.size)
+        else:
+            self.mat = mat
 
     def __hash__(self):
-        return self.hash
+        return hash(self.mat.tobytes()) + hash(self.transform_type)
 
     def __eq__(self, other):
         return all([abs(i-n) < EPSILON for l, r in zip(self.mat, other.mat) for i, n in zip(l, r)])
@@ -246,16 +237,14 @@ class Matrix:
     def __setitem__(self, key, value):
         self.mat[key] = value
 
-    def __repr__(self):
-        out = ""
-        for row in self.mat:
-            for item in row:
-                out += f"{item}, "
-            out += "\n"
-        return out
+    def __round__(self, precision):
+        return np.round(self.mat, decimals=precision)
 
     def __iter__(self):
         return iter(self.mat)
+
+    def __abs__(self):
+        return Matrix(np.abs(self.mat))
 
     def pop(self, idx):
         return Matrix([sublist for i, sublist in enumerate(self.mat) if i != idx])
@@ -270,17 +259,12 @@ class Matrix:
 
     @cache
     def transpose(self):
-        return Matrix(list(zip(*self.mat)))
+        return Matrix(self.mat.transpose())
 
     @cache
     def determinant(self):
-        if self.size[0] > 2:
-            return sum([self.mat[0][i]*self.cofactor(0, i) for i in range(len(self.mat[0]))])
-        return Matrix.determ_base(Matrix(self.mat))
+        return np.linalg.det(self.mat)
 
-    @staticmethod
-    def determ_base(mat):
-        return (mat[0][0] * mat[1][1]) - (mat[0][1] * mat[1][0])
 
     @cache
     def submatrix(self, row, column):

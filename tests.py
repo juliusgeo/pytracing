@@ -4,8 +4,8 @@ from main import Point, Vector, Tuple, Projectile, Environment, Color, Canvas, M
 
 import unittest
 import math
-
-
+import numpy as np
+import numpy.testing as npt
 class TupleTests(unittest.TestCase):
     @staticmethod
     def show_image():
@@ -16,7 +16,7 @@ class TupleTests(unittest.TestCase):
     def test_add(self):
         a = Point(3, -2, 5)
         b = Vector(-2, 3, 1)
-        self.assertEqual(a + b, Tuple(1, 1, 6, 1))
+        self.assertAlmostEquals(a + b, Tuple(1, 1, 6, 1))
 
     def test_sub(self):
         p1 = Point(3, 2, 1)
@@ -85,7 +85,7 @@ class TupleTests(unittest.TestCase):
         c = Canvas(10, 20)
         red = Color(1, 0, 0)
         c.write_pixel(2, 3, red)
-        self.assertEqual(c[3 * 10 + 2], red)
+        self.assertEqual(c[2][3], red)
 
     def test_ppm(self):
         c = Canvas(5, 3)
@@ -100,7 +100,7 @@ class TupleTests(unittest.TestCase):
 0 0 0 0 0 0 0 0 0 0 0 255""")
 
         c = Canvas(10, 2)
-        for i in range(20):
+        for i in range(10):
             c[i] = Color(1, 0.8, 0.6)
         self.assertEqual(c.ppm_file(),
                          """P3
@@ -153,11 +153,11 @@ class TupleTests(unittest.TestCase):
     def test_mat_minor(self):
         m = Matrix([[3, 5, 0], [2, -1, -7], [6, -1, 5]])
         b = m.submatrix(1, 0)
-        self.assertEqual(b.determinant(), 25)
-        self.assertEqual(m.minor(1, 0), 25)
+        self.assertAlmostEqual(b.determinant(), 25)
+        self.assertAlmostEqual(m.minor(1, 0), 25)
 
     def test_mat_determinant(self):
-        self.assertEqual(Matrix([[1, 5], [-3, 2]]).determinant(), 17)
+        self.assertAlmostEqual(Matrix([[1, 5], [-3, 2]]).determinant(), 17)
 
     def test_submatrices(self):
         self.assertEqual(Matrix([[1, 5, 0], [-3, 2, 7], [0, 6, -3]]).submatrix(0, 2),
@@ -166,12 +166,12 @@ class TupleTests(unittest.TestCase):
                          Matrix([[-6, 1, 6], [-8, 8, 6], [-7, -1, 1]]))
 
     def test_larger_mat_determinant(self):
-        self.assertEqual(
+        self.assertAlmostEqual(
             Matrix([[1, 2, 6], [-5, 8, -4], [2, 6, 4]]).determinant(), -196)
         m = Matrix([[-2, -8, 3, 5], [-3, 1, 7, 3],
                    [1, 2, -9, 6], [-6, 7, 7, -9]])
-        self.assertEqual(m.determinant(), -4071)
-        self.assertEqual(m.cofactor(0, 1), 447)
+        self.assertAlmostEqual(m.determinant(), -4071)
+        self.assertAlmostEqual(m.cofactor(0, 1), 447)
 
     def test_inversion(self):
         m = Matrix([[8, -5, 9, 2],
@@ -224,7 +224,7 @@ class TupleTests(unittest.TestCase):
             setattr(p, cur_comb[0], getattr(
                 p, cur_comb[0])+getattr(p, cur_comb[1]))
             self.assertEqual(Matrix.shearing(*start)*Point(1, 2, 3), p)
-            start = [start[-1]] + start[:-1]
+            start = np.roll(start, shift=1, axis=0)
 
     def test_clock_face(self):
         hand = Vector(0, 1, 0).normalize()
@@ -233,8 +233,8 @@ class TupleTests(unittest.TestCase):
         c = Canvas(40, 40)
         white = Color(1, 1, 1)
         while hands < 12:
-            c.write_pixel(center_point[0]+round(hand.x*(c.width*2/4)),
-                          center_point[1]+round(hand.y*(c.height*2/4)), white)
+            c.write_pixel(np.round(center_point[0]+hand.x*(c.width*2/4)),
+                          np.round(center_point[1]+hand.y*(c.height*2/4)), white)
             hand = (Matrix.rotating(math.pi/6, axis=2)*hand).normalize()
             hands = hands + 1
         c.ppm_file("out.ppm")
@@ -295,7 +295,7 @@ class TupleTests(unittest.TestCase):
         self.assertEqual(r & s, None)
         s.transform = Matrix.scaling(2, 2, 2)
         r = Ray(Point(0, 0, -5), Vector(0, 0, 1))
-        self.assertEqual(s & r, (3, 7))
+        npt.assert_almost_equal(s & r, (3, 7))
 
     @unittest.skipUnless(os.environ.get("TEST_RAY"), "this is too slow")
     def test_raycast_sphere(self):
