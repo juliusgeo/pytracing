@@ -310,7 +310,8 @@ class TupleTests(unittest.TestCase):
         shape = Sphere(5, material=Material(color=Color(.2, 0.1, 1)))
         shape2 = Sphere(.1, material=Material(color=Color(1, 0.2, 1)), transform=Matrix.translating(0, -1, -1))
         light = Light(Point(-5, -5, -5), Color(.75, .75, .75))
-        self.show_image(Scene(camera, background, canvas, [shape, shape2], [light]).trace())
+        light2 = Light(Point(-5, +5, -5), Color(.75, .75, .75))
+        self.show_image(Scene(camera, background, canvas, [shape, shape2], [light, light2]).trace())
 
     def test_normal_vectors(self):
         s = Sphere(5)

@@ -506,7 +506,7 @@ class Scene:
         return (ambient+diffuse+specular)
 
     @staticmethod
-    def test_hit(shapes, camera, point, x, y):
+    def test_hit(shapes, camera, point):
         intersections = []
         for shape in shapes:
             r = Ray(camera, (point - camera).normalize())
@@ -522,8 +522,10 @@ class Scene:
         closest_obj = fut.result()
         if closest_obj is None:
             return
+        color = Color(0, 0, 0)
         for light in lights:
-            self.canvas.write_pixel(x, y, Scene.lighting(closest_obj, light))
+            color = color + Scene.lighting(closest_obj, light)
+        self.canvas.write_pixel(x, y, color)
 
     def trace(self):
         with ProcessPoolExecutor(4) as pool:
@@ -532,5 +534,5 @@ class Scene:
                 for x in range(self.canvas.width):
                     world_x = -self.half + self.pixel_size_x * x
                     point = Point(world_x, world_y, self.background[0])
-                    pool.submit(self.test_hit, *(self.shapes, self.camera, point, x, y)).add_done_callback(partial(self.write_pixel_safe, x, y, self.lights))
+                    pool.submit(self.test_hit, *(self.shapes, self.camera, point)).add_done_callback(partial(self.write_pixel_safe, x, y, self.lights))
             return self.canvas
