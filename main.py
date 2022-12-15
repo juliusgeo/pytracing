@@ -1,8 +1,12 @@
+import weakref
 from math import sqrt, cos, sin
 from uuid import uuid4
 from enum import Enum
-from functools import cached_property, cache
+from functools import cached_property, cache, partial
 import math
+from multiprocessing import Pool
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from threading import Lock
 from collections.abc import Iterable
 EPSILON = .0001
 import numpy as np
@@ -28,7 +32,7 @@ class Tuple:
         return hash(self.mat.tobytes())
 
     def __eq__(self, other):
-        return all([math.isclose(i, j, abs_tol=EPSILON) for i, j in zip(self.mat.flatten(), other.mat.flatten())])
+        return all((math.isclose(i, j, abs_tol=EPSILON) for i, j in zip(self.mat.flatten(), other.mat.flatten())))
 
     def __add__(self, other):
         if not isinstance(other, Tuple):
@@ -38,6 +42,7 @@ class Tuple:
     def __radd__(self, other):
         return self.__add__(other)
 
+    @cache
     def __sub__(self, other):
         if not isinstance(other, Tuple):
             return type(self)(*[self.mat - other])
@@ -53,8 +58,10 @@ class Tuple:
     def __mul__(self, other):
         if isinstance(other, Matrix):
             return Matrix.__mul__(other, self)
+        elif isinstance(other, Color):
+            return Color(*(i*j for i, j in zip(self, other)))
         elif not isinstance(other, Vector):
-            return type(self)(*[i*other for i in self])
+            return type(self)(*(i*other for i in self))
         else:
             return self.cross(other)
 
@@ -77,7 +84,10 @@ class Tuple:
     def __iter__(self):
         return iter(self.mat)
 
+    @cache
     def normalize(self):
+        if self.m == 0:
+            return self
         return type(self)(*self.mat/self.m)
 
     @cache
@@ -100,6 +110,10 @@ class Tuple:
     @cache
     def invert(self):
         return type(self)(*1/self.mat)
+
+    def reflect(self, normal):
+        return type(self)(*(self.mat - normal.mat * 2 * self.dot(normal)))
+
 
 class Point(Tuple):
     w = 1
@@ -142,11 +156,11 @@ class Color(Tuple):
     @cache
     def __mul__(self, other):
         if not isinstance(other, Color):
-            return Color(*[i*other for i in self])
+            return Color(*(i*other for i in self.mat))
         return Color(self.x*other.x, self.y*other.y, self.z*other.z)
 
     def clamp(self):
-        return Color(*[round(clamper(i, 0, 255)) for i in self])
+        return Color(*(round(clamper(i, 0, 255)) for i in self))
 
     def __str__(self):
         clamped = (self*255).clamp()
@@ -184,7 +198,7 @@ class Canvas:
 """
 
     def chunk_canvas(self):
-        string = ' '.join([str(i) for i in self.canv_arr.flatten()])
+        string = ' '.join((str(i) for i in self.canv_arr.flatten()))
 
         def chunker(s):
             chunks = []
@@ -233,7 +247,7 @@ class Matrix:
         return hash(self.mat.tobytes()) + hash(self.transform_type)
 
     def __eq__(self, other):
-        return all([math.isclose(i, j, abs_tol=EPSILON) for i, j in zip(self.mat.flatten(), other.mat.flatten())])
+        return all((math.isclose(i, j, abs_tol=EPSILON) for i, j in zip(self.mat.flatten(), other.mat.flatten())))
 
     def __getitem__(self, item):
         return self.mat[item]
@@ -355,16 +369,31 @@ class Ray:
         return f"origin: {self.origin}, direction: {self.direction}"
 
 
+class Light:
+    def __init__(self, position, intensity):
+        self.intensity = intensity
+        self.position = position
+
+
+class Material:
+    def __init__(self, color=Color(0, 1, 0), ambient=.1, diffuse=.9, specular=.9, shininess=200):
+        self.color = color
+        self.ambient = ambient
+        self.diffuse = diffuse
+        self.specular = specular
+        self.shininess = shininess
+
+
 class Sphere:
-    def __init__(self, radius, transform=Matrix.eye(), color=Color(1, 0, 0)):
+    def __init__(self, radius, transform=Matrix.eye(), material=Material(color=Color(1, 0, 0))):
         self.id = uuid4()
         self.radius = radius
         self.transform = transform
-        self.color = color
+        self.material = material
         self._hash = self.hash()
 
     def hash(self):
-        return sum([hash(self.id), hash(self.radius), hash(self.transform), hash(self.color)])
+        return sum([hash(self.id), hash(self.radius), hash(self.transform), hash(self.material.color)])
 
     def __hash__(self):
         return self._hash
@@ -385,11 +414,18 @@ class Sphere:
     def __rand__(self, other):
         return self.__and__(other)
 
+    def normal(self, point):
+        obj_normal =(self.transform.inverse()*point)-Point(0, 0, 0)
+        return Vector(*obj_normal*self.transform.submatrix(3, 3).inverse().transpose()).normalize()
+
 
 class Intersection:
-    def __init__(self, t, object):
+    def __init__(self, t, object, point=None, normal=None, eye=None):
         self.obj = object
         self.t = t
+        self.point = point
+        self.normal = normal
+        self.eye = eye
 
     def __add__(self, other):
         if isinstance(other, list):
@@ -401,7 +437,7 @@ class Intersection:
 
     @staticmethod
     def hit(l):
-        return min([i for i in l if i is not None and i >= 0], default=None)
+        return min((i for i in l if i is not None and i >= 0), default=None)
 
     def __eq__(self, other):
         if isinstance(other, int):
@@ -427,22 +463,74 @@ class Intersection:
     def __gt__(self, other):
         return not self.__le__(other) and not self.__eq__(other)
 
+
 class Scene:
-    def __init__(self, camera, background, canvas, shapes):
+    def __init__(self, camera, background, canvas, shapes, lights):
         self.camera = camera
         self.background = background
         self.canvas = canvas
         self.shapes = shapes
+        self.lights = lights
         self.half = background[1] / 2
         self.pixel_size_x = background[0]/self.canvas.width
         self.pixel_size_y = background[1]/self.canvas.height
+        self.lock = Lock()
+
+    @staticmethod
+    def lighting(object, light):
+        material, light, position, eye, normal = object.obj.material, light, object.point, object.eye, object.normal
+        effective_color = material.color*light.intensity
+        # combine the surface color with the light's color/intensity effective_color ← material.color * light.intensity
+        # find the direction to the light source
+        lightv = (light.position - position).normalize()  # compute the ambient contribution
+        ambient = effective_color * material.ambient
+        # light_dot_normal represents the cosine of the angle between the # light vector and the normal vector. A negative number means the # light is on the other side of the surface.
+        l_norm = lightv.dot(normal)
+        if l_norm < 0:
+            diffuse = Color(0, 0, 0)
+            specular = Color(0, 0, 0)
+        else:
+            # compute the diffuse contribution
+            diffuse = effective_color * material.diffuse * l_norm
+            # reflect_dot_eye represents the cosine of the angle between the
+            # reflection vector and the eye vector. A negative number means the # light reflects away from the eye.
+            reflect = (-lightv).reflect(normal)
+            reflect_dot_eye = reflect.dot(eye)
+            if reflect_dot_eye <= 0:
+                specular = Color(0, 0, 0)
+            else:
+                # compute the specular contribution
+                factor = math.pow(reflect_dot_eye, material.shininess)
+                specular = light.intensity * material.specular * factor
+        # Add the three contributions together to get the final shading
+        return (ambient+diffuse+specular)
+
+    @staticmethod
+    def test_hit(shapes, camera, point, x, y):
+        intersections = []
+        for shape in shapes:
+            r = Ray(camera, (point - camera).normalize())
+            if b := shape & r:
+                for t in b:
+                    point = r.position(t)
+                    normal = shape.normal(point)
+                    eye = -r.direction
+                    intersections.append(Intersection(t, shape, point, normal, eye))
+        return Intersection.hit(intersections)
+
+    def write_pixel_safe(self, x, y, lights, fut):
+        closest_obj = fut.result()
+        if closest_obj is None:
+            return
+        for light in lights:
+            self.canvas.write_pixel(x, y, Scene.lighting(closest_obj, light))
 
     def trace(self):
-        for y in range(self.canvas.height):
-            world_y = self.half - self.pixel_size_y * y
-            for x in range(self.canvas.width):
-                world_x = -self.half + self.pixel_size_x * x
-                for shape in self.shapes:
-                    if shape & Ray(self.camera, (Point(world_x, world_y, self.background[0]) - self.camera).normalize()):
-                        self.canvas.write_pixel(x, y, shape.color)
-        return self.canvas
+        with ProcessPoolExecutor(4) as pool:
+            for y in range(self.canvas.height):
+                world_y = self.half - self.pixel_size_y * y
+                for x in range(self.canvas.width):
+                    world_x = -self.half + self.pixel_size_x * x
+                    point = Point(world_x, world_y, self.background[0])
+                    pool.submit(self.test_hit, *(self.shapes, self.camera, point, x, y)).add_done_callback(partial(self.write_pixel_safe, x, y, self.lights))
+            return self.canvas

@@ -1,6 +1,7 @@
 import os
 
-from main import Point, Vector, Tuple, Projectile, Environment, Color, Canvas, Matrix, Ray, Sphere, Intersection, Scene
+from main import Point, Vector, Tuple, Projectile, Environment, Color, Canvas, Matrix, Ray, Sphere, Intersection, Scene, Light, \
+Material
 
 import unittest
 import math
@@ -303,8 +304,35 @@ class TupleTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("TEST_RAY"), "this is too slow")
     def test_raycast_sphere(self):
-        camera = Point(0, 0, -5)
-        background = (10, 10)
+        camera = Point(0, -1, -5)
+        background = (7, 7)
         canvas = Canvas(200, 200)
-        shape = Sphere(5)
-        self.show_image(Scene(camera, background, canvas, [shape]).trace())
+        shape = Sphere(5, material=Material(color=Color(.2, 0.1, 1)))
+        shape2 = Sphere(.1, material=Material(color=Color(1, 0.2, 1)), transform=Matrix.translating(0, -1, -1))
+        light = Light(Point(-5, -5, -5), Color(.75, .75, .75))
+        self.show_image(Scene(camera, background, canvas, [shape, shape2], [light]).trace())
+
+    def test_normal_vectors(self):
+        s = Sphere(5)
+        self.assertEqual(s.normal(Point(1, 0, 0)), Vector(1, 0, 0))
+        self.assertEqual(s.normal(Point(0, 1, 0)), Vector(0, 1, 0))
+        self.assertEqual(s.normal(Point(0, 0, 1)), Vector(0, 0, 1))
+        self.assertEqual(s.normal(Point(0, 0, 1)), Vector(0, 0, 1))
+        self.assertEqual(s.normal(Point(math.sqrt(3), math.sqrt(3), math.sqrt(3))), Vector(math.sqrt(3)/3, math.sqrt(3)/3, math.sqrt(3)/3))
+
+    def test_normal_vectors_transform(self):
+        s = Sphere(5, transform=Matrix.translating(0, 1, 0))
+        self.assertEqual(s.normal(Point(0, 1.70711, -0.70711)), Vector(0, 0.70711, -0.70711))
+        s = Sphere(5, transform=Matrix.scaling(1, 0.5, 1) * Matrix.rotating(math.pi / 5, 2))
+        self.assertEqual(s.normal(Point(0, math.sqrt(2) / 2, -math.sqrt(2) / 2)), Vector(0, 0.97014, -0.24254))
+
+    def test_reflect(self):
+        self.assertEqual(Vector(1, -1, 0).reflect(Vector(0, 1, 0)), Vector(1, 1, 0))
+        self.assertEqual(Vector(0, -1, 0).reflect(Vector(math.sqrt(2) / 2, math.sqrt(2) / 2, 0)), Vector(1, 0, 0))
+
+    def test_lighting(self):
+        m = Material()
+        position = Point(0, 0, 0)
+        self.assertEqual(Scene.lighting(Material(), Light(Color(1, 1, 1), Point(0, 0, 0)), Point(0, 0, 1), Vector(0, 0, -1), Vector(0, 0, -1)), Color(1.9, 1.9, 1.9))
+        self.assertEqual(Scene.lighting(Material(), Light(Color(1, 1, 1), Point(0, 0, 0)), Point(0, 0, 0), Vector(0, 0, -1), Vector(0, 0, -1)), Color(1.0, 1.0, 1.0))
+        self.assertEqual(Scene.lighting(Material(), Light(Color(1, 1, 1), Point(0, 0, 0)), Point(0, 0, 0), Vector(0, 0, -1), Vector(0, 0, -1)), Color(1.9, 1.9, 1.9))
