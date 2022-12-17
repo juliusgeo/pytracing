@@ -4,15 +4,18 @@ from uuid import uuid4
 from enum import Enum
 from functools import cached_property, cache, partial
 import math
-from multiprocessing import Pool
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+
+from concurrent.futures import ProcessPoolExecutor
 from threading import Lock
-from collections.abc import Iterable
+
 EPSILON = .0001
+
 import numpy as np
+
 
 def clamper(x, l, u=None):
     return l if x < l else u if x > u else x
+
 
 class Tuple:
     __slots__ = ("x", "y", "z", "w", "m", "mat")
@@ -114,6 +117,12 @@ class Tuple:
     def reflect(self, normal):
         return type(self)(*(self.mat - normal.mat * 2 * self.dot(normal)))
 
+    @cache
+    def cross(self, other):
+        return Vector(self.y * other.z - self.z * other.y,
+                      self.z * other.x - self.x * other.z,
+                      self.x * other.y - self.y * other.x)
+
 
 class Point(Tuple):
     w = 1
@@ -125,12 +134,6 @@ class Vector(Tuple):
     w = 0
     def __init__(self, x=0, y=0, z=0, w=0):
         super().__init__(x, y, z, 0)
-
-    @cache
-    def cross(self, other):
-        return Vector(self.y * other.z - self.z * other.y,
-                      self.z * other.x - self.x * other.z,
-                      self.x * other.y - self.y * other.x)
 
 
 class Projectile:
@@ -232,6 +235,7 @@ class TransformType(Enum):
     SCALING = "scaling"
     ROTATING = "rotating"
     IDENTITY = "identity"
+    VIEW = "view"
     UNKNOWN = None
 
 class Matrix:
@@ -345,6 +349,13 @@ class Matrix:
                        [yx,  1, yz, 0],
                        [zx, zy,  1, 0],
                        [0,   0,  0, 1]], transform_type=TransformType.SHEARING)
+
+    @staticmethod
+    def viewing(f, t, up):
+        forward = (t-f).normalize()
+        left = forward.cross(up.normalize())
+        true_up = left.cross(forward)
+        return Matrix([[left.x, left.y, left.z, 0], [true_up.x, true_up.y, true_up.z, 0], [-forward.x, -forward.y, -forward.z, 0], [0, 0, 0, 1]]) * Matrix.translating(-f.x, -f.y, -f.z)
 
     @staticmethod
     def eye():
@@ -464,6 +475,30 @@ class Intersection:
         return not self.__le__(other) and not self.__eq__(other)
 
 
+class Camera:
+    def __init__(self, point, x, y, fov, transform=TransformType.IDENTITY):
+        self.point = point
+        self.hsize = x
+        self.vsize = y
+        self.transform = transform
+        half, aspect = math.tan(fov / 2), x / y
+        if aspect >= 1:
+            self.half_width = half
+            self.half_height = half / aspect
+        else:
+            self.half_width = half * aspect
+            self.half_height = half
+        self.pixel_size = (self.half_width * 2) / self.hsize
+
+    def ray_for_pixel(self, x, y):
+        xoffset = (x + 0.5) * self.pixel_size
+        yoffset = (y + 0.5) * self.pixel_size
+        world_x = self.half_width - xoffset
+        world_y = self.half_height - yoffset
+        pixel = self.transform.inverse() * Point(world_x, world_y, -1)
+        origin = self.transform.inverse() * Point(0, 0, 0)
+        return Ray(origin, (pixel-origin).normalize())
+
 class Scene:
     def __init__(self, camera, background, canvas, shapes, lights):
         self.camera = camera
@@ -480,36 +515,21 @@ class Scene:
     def lighting(object, light):
         material, light, position, eye, normal = object.obj.material, light, object.point, object.eye, object.normal
         effective_color = material.color*light.intensity
-        # combine the surface color with the light's color/intensity effective_color ← material.color * light.intensity
-        # find the direction to the light source
         lightv = (light.position - position).normalize()  # compute the ambient contribution
         ambient = effective_color * material.ambient
-        # light_dot_normal represents the cosine of the angle between the # light vector and the normal vector. A negative number means the # light is on the other side of the surface.
         l_norm = lightv.dot(normal)
-        if l_norm < 0:
-            diffuse = Color(0, 0, 0)
-            specular = Color(0, 0, 0)
-        else:
-            # compute the diffuse contribution
+        if l_norm >= 0:
             diffuse = effective_color * material.diffuse * l_norm
-            # reflect_dot_eye represents the cosine of the angle between the
-            # reflection vector and the eye vector. A negative number means the # light reflects away from the eye.
             reflect = (-lightv).reflect(normal)
             reflect_dot_eye = reflect.dot(eye)
-            if reflect_dot_eye <= 0:
-                specular = Color(0, 0, 0)
-            else:
-                # compute the specular contribution
-                factor = math.pow(reflect_dot_eye, material.shininess)
-                specular = light.intensity * material.specular * factor
-        # Add the three contributions together to get the final shading
-        return (ambient+diffuse+specular)
+            specular = Color(0, 0, 0) if reflect_dot_eye <= 0 else light.intensity * material.specular * math.pow(reflect_dot_eye, material.shininess)
+        return ambient if l_norm < 0 else (ambient+diffuse+specular)
 
     @staticmethod
-    def test_hit(shapes, camera, point):
+    def test_hit(shapes, camera, x, y):
         intersections = []
         for shape in shapes:
-            r = Ray(camera, (point - camera).normalize())
+            r = camera.ray_for_pixel(x, y)
             if b := shape & r:
                 for t in b:
                     point = r.position(t)
@@ -529,10 +549,7 @@ class Scene:
 
     def trace(self):
         with ProcessPoolExecutor(4) as pool:
-            for y in range(self.canvas.height):
-                world_y = self.half - self.pixel_size_y * y
-                for x in range(self.canvas.width):
-                    world_x = -self.half + self.pixel_size_x * x
-                    point = Point(world_x, world_y, self.background[0])
-                    pool.submit(self.test_hit, *(self.shapes, self.camera, point)).add_done_callback(partial(self.write_pixel_safe, x, y, self.lights))
+            for y in range(self.camera.vsize):
+                for x in range(self.camera.hsize):
+                    pool.submit(self.test_hit, *(self.shapes, self.camera, x, y)).add_done_callback(partial(self.write_pixel_safe, x, y, self.lights))
             return self.canvas

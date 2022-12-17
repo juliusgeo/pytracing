@@ -1,7 +1,7 @@
 import os
 
 from main import Point, Vector, Tuple, Projectile, Environment, Color, Canvas, Matrix, Ray, Sphere, Intersection, Scene, Light, \
-Material
+Material, Camera
 
 import unittest
 import math
@@ -304,14 +304,18 @@ class TupleTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("TEST_RAY"), "this is too slow")
     def test_raycast_sphere(self):
-        camera = Point(0, -1, -5)
+        camera = Camera(Point(0, -1, -5), 200, 200, 70, Matrix.viewing(Point(0, 1.5, -5), Point(0, 1, 0), Vector(0, 1, 0)))
         background = (7, 7)
         canvas = Canvas(200, 200)
+
         shape = Sphere(5, material=Material(color=Color(.2, 0.1, 1)))
         shape2 = Sphere(.1, material=Material(color=Color(1, 0.2, 1)), transform=Matrix.translating(0, -1, -1))
+
+        left_wall = Sphere(.1, material=Material(color=Color(1, 0.9, .9), specular=0), transform=Matrix.translating(0, 0, 5)*Matrix.rotating(-math.pi/4, axis=1)*Matrix.rotating(math.pi/2, axis=0)*Matrix.scaling(10, .01, 10))
+        right_wall = Sphere(.1, material=Material(color=Color(1, 0.9, .9), specular=0), transform=Matrix.translating(0, 0, 5)*Matrix.rotating(math.pi/4, axis=1)*Matrix.rotating(math.pi/2, axis=0)*Matrix.scaling(10, .01, 10))
         light = Light(Point(-5, -5, -5), Color(.75, .75, .75))
         light2 = Light(Point(-5, +5, -5), Color(.75, .75, .75))
-        self.show_image(Scene(camera, background, canvas, [shape, shape2], [light, light2]).trace())
+        self.show_image(Scene(camera, background, canvas, [left_wall, right_wall, shape, shape2], [light, light2]).trace())
 
     def test_normal_vectors(self):
         s = Sphere(5)
@@ -331,9 +335,12 @@ class TupleTests(unittest.TestCase):
         self.assertEqual(Vector(1, -1, 0).reflect(Vector(0, 1, 0)), Vector(1, 1, 0))
         self.assertEqual(Vector(0, -1, 0).reflect(Vector(math.sqrt(2) / 2, math.sqrt(2) / 2, 0)), Vector(1, 0, 0))
 
-    def test_lighting(self):
-        m = Material()
-        position = Point(0, 0, 0)
-        self.assertEqual(Scene.lighting(Material(), Light(Color(1, 1, 1), Point(0, 0, 0)), Point(0, 0, 1), Vector(0, 0, -1), Vector(0, 0, -1)), Color(1.9, 1.9, 1.9))
-        self.assertEqual(Scene.lighting(Material(), Light(Color(1, 1, 1), Point(0, 0, 0)), Point(0, 0, 0), Vector(0, 0, -1), Vector(0, 0, -1)), Color(1.0, 1.0, 1.0))
-        self.assertEqual(Scene.lighting(Material(), Light(Color(1, 1, 1), Point(0, 0, 0)), Point(0, 0, 0), Vector(0, 0, -1), Vector(0, 0, -1)), Color(1.9, 1.9, 1.9))
+    def test_view_transform(self):
+        f = Point(1, 3, 2)
+        t = Point(4, -2, 8)
+        up = Vector(1, 1, 0)
+        self.assertEqual(Matrix.viewing(f, t, up), Matrix([[ -0.50709,  0.50709, 0.67612, -2.36643],
+                                                           [ 0.76772, 0.60609, 0.12122, -2.82843],
+                                                           [ -0.35857, 0.59761, -0.71714, 0.00000],
+                                                           [ 0.00000, 0.00000, 0.00000, 1.00000]]))
+
